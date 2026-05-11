@@ -8,11 +8,17 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
+    room_name TEXT,
     motion1 TEXT NOT NULL,
     motion2 TEXT NOT NULL,
     motion3 TEXT NOT NULL,
+    infoslide1 TEXT,
+    infoslide2 TEXT,
+    infoslide3 TEXT,
     gov_ranking TEXT,
     opp_ranking TEXT,
+    gov_veto TEXT,
+    opp_veto TEXT,
     status TEXT DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
