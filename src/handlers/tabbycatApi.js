@@ -1,8 +1,17 @@
 const axios = require('axios');
 
+async function fetchTeamsFromTabbycat(tabbycatUrl, token, tournamentSlug) {
+  const headers = { Authorization: `Token ${token}`, Accept: 'application/json' };
+  const base = `${tabbycatUrl.replace(/\/$/, '')}/api/v1/tournaments/${tournamentSlug}`;
+  const res = await axios.get(`${base}/teams`, { headers });
+  return res.data.map(t => t.long_name);
+}
+
+module.exports = { fetchDraw, fetchTeamsFromTabbycat };
+
 async function fetchDraw(tabbycatUrl, token, tournamentSlug, roundNumber) {
-  const headers = { Authorization: `Token ${token}` };
-  const base = `${tabbycatUrl}/api/v1/tournaments/${tournamentSlug}`;
+  const headers = { Authorization: `Token ${token}`, Accept: 'application/json' };
+  const base = `${tabbycatUrl.replace(/\/$/, '')}/api/v1/tournaments/${tournamentSlug}`;
 
   const [pairingsRes, teamsRes, venuesRes, motionsRes] = await Promise.all([
     axios.get(`${base}/rounds/${roundNumber}/pairings`, { headers }),
@@ -43,4 +52,4 @@ async function fetchDraw(tabbycatUrl, token, tournamentSlug, roundNumber) {
   return { draw, motions };
 }
 
-module.exports = { fetchDraw };
+module.exports = { fetchDraw, fetchTeamsFromTabbycat };

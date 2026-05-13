@@ -2,21 +2,9 @@ const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = re
 const db = require('../db/database');
 
 module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('startround')
-    .setDescription('Start a new round and send motions to Gov and Opp')
-    .addStringOption(option =>
-      option.setName('motion1')
-        .setDescription('First motion')
-        .setRequired(true))
-    .addStringOption(option =>
-      option.setName('motion2')
-        .setDescription('Second motion')
-        .setRequired(true))
-    .addStringOption(option =>
-      option.setName('motion3')
-        .setDescription('Third motion')
-        .setRequired(true)),
+data: new SlashCommandBuilder()
+  .setName('startround')
+  .setDescription('Start a new round, fetch draw and motions from Tabbycat automatically'),
 
   async execute(interaction) {
     await interaction.deferReply();
@@ -44,15 +32,20 @@ module.exports = {
     }
 
     let draw;
+    let motions;
+    let currentRoundNumber = 1;
     try {
       const roundRes = await axios.get(
-        `${tabbycat_url}/api/v1/tournaments/${tournament_slug}/rounds`,
-        { headers: { Authorization: `Token ${tabbycat_token}` } }
+        `${tabbycat_url.replace(/\/$/, '')}/api/v1/tournaments/${tournament_slug}/rounds`,
+        { headers: { Authorization: `Token ${tabbycat_token}`, Accept: 'application/json' } }
       );
       const currentRound = roundRes.data.find(r => r.completed === false);
       const roundNumber = currentRound ? currentRound.seq : 1;
+      currentRoundNumber = roundNumber;
 
-      draw = await fetchDraw(tabbycat_url, tabbycat_token, tournament_slug, roundNumber);
+      const result = await fetchDraw(tabbycat_url, tabbycat_token, tournament_slug, roundNumber);
+      draw = result.draw;
+      motions = result.motions;
     } catch (err) {
       console.error(err);
       return interaction.editReply('Could not fetch draw from Tabbycat. Check your URL and token in dashboard settings.');
@@ -60,18 +53,20 @@ module.exports = {
 
     let teamsData;
     try {
-      const res = await axios.get(`${process.env.APPS_SCRIPT_URL}?page=bot`);
-      teamsData = res.data;
+      const res = await axios.get(`${process.env.APPS_SCRIPT_URL}?page=bot`, { maxRedirects: 5, headers: { Accept: 'application/json' } });
+settings = res.data;
     } catch (err) {
       return interaction.editReply('Could not fetch team data from dashboard.');
     }
 
     const { fetchTeams } = require('../handlers/teamsHelper');
     const teamDiscordMap = await fetchTeams(process.env.APPS_SCRIPT_URL);
+    console.log('Team Discord Map:', JSON.stringify(teamDiscordMap));
+    console.log('Draw:', JSON.stringify(draw));
 
     const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
-    const motionText = `**Motions for this round:**\n1. ${motion1}\n2. ${motion2}\n3. ${motion3}\n\nPlease submit:\n**Preference:** Which motion do you want? (1, 2 or 3)\n**Veto:** Which motion do you NOT want? (1, 2 or 3)`;
+    const motionText = `**Round ${currentRoundNumber} Motions:**\n1. ${motions[0]?.text || 'TBA'}\n2. ${motions[1]?.text || 'TBA'}\n3. ${motions[2]?.text || 'TBA'}\n\nPlease submit:\n**Preference:** Which motion do you want? (1, 2 or 3)\n**Veto:** Which motion do you NOT want? (1, 2 or 3)`;
 
     let sent = 0;
 
@@ -80,10 +75,14 @@ module.exports = {
       const oppDiscord = teamDiscordMap[room.opp];
 
       db.prepare(`
-        INSERT INTO rounds (guild_id, channel_id, motion1, motion2, motion3, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `).run(guildId, channelId, motion1, motion2, motion3);
-
+        INSERT INTO rounds (guild_id, channel_id, room_name, round_number, motion1, motion2, motion3, infoslide1, infoslide2, infoslide3, started_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+      `).run(
+        guildId, channelId, room.room, currentRoundNumber,
+        motions[0]?.text || '', motions[1]?.text || '', motions[2]?.text || '',
+        motions[0]?.info_slide || '', motions[1]?.info_slide || '', motions[2]?.info_slide || '',
+        Date.now()
+      );
       const round = db.prepare('SELECT * FROM rounds WHERE guild_id = ? ORDER BY id DESC LIMIT 1').get(guildId);
 
       const govRow = new ActionRowBuilder().addComponents(
@@ -98,10 +97,19 @@ module.exports = {
         new ButtonBuilder().setCustomId(`pref_${round.id}_opp_3`).setLabel('Pref 3').setStyle(ButtonStyle.Primary),
       );
 
+      let govUserId = null;
+      let oppUserId = null;
+
       if (govDiscord) {
         try {
           const govUser = await interaction.client.users.fetch(govDiscord.id1);
-          await govUser.send({ content: `**Room: ${room.room}**\nYou are: **Government**\n\n${motionText}`, components: [govRow] });
+          govUserId = govUser.id;
+          const deadline = new Date(Date.now() + 5 * 60 * 1000);
+          const deadlineStr = deadline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          await govUser.send({ 
+            content: `**Room: ${room.room} | Round ${currentRoundNumber}**\nYou are: **Government**\n\n${motionText}\n\n⏰ Submit before **${deadlineStr}**`, 
+            components: [govRow] 
+          });
           sent++;
         } catch(e) { console.error(`Could not DM gov team ${room.gov}`, e); }
       }
@@ -109,10 +117,41 @@ module.exports = {
       if (oppDiscord) {
         try {
           const oppUser = await interaction.client.users.fetch(oppDiscord.id1);
-          await oppUser.send({ content: `**Room: ${room.room}**\nYou are: **Opposition**\n\n${motionText}`, components: [oppRow] });
+          oppUserId = oppUser.id;
+          const deadline = new Date(Date.now() + 5 * 60 * 1000);
+          const deadlineStr = deadline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          await oppUser.send({ 
+            content: `**Room: ${room.room} | Round ${currentRoundNumber}**\nYou are: **Opposition**\n\n${motionText}\n\n⏰ Submit before **${deadlineStr}**`, 
+            components: [oppRow] 
+          });
           sent++;
         } catch(e) { console.error(`Could not DM opp team ${room.opp}`, e); }
       }
+
+      db.prepare('UPDATE rounds SET gov_discord_id = ?, opp_discord_id = ? WHERE id = ?').run(govUserId, oppUserId, round.id);
+
+      setTimeout(async () => {
+        const updatedRound = db.prepare('SELECT * FROM rounds WHERE id = ?').get(round.id);
+        if (updatedRound.status !== 'pending') return;
+
+        if (!updatedRound.gov_ranking || !updatedRound.gov_veto) {
+          if (govUserId) {
+            try {
+              const govUser = await interaction.client.users.fetch(govUserId);
+              await govUser.send(`⚠️ **1 minute left!** Room: ${room.room} | You haven't submitted your preference and veto yet. Please do it now!`);
+            } catch(e) { console.error('Could not send reminder to gov', e); }
+          }
+        }
+
+        if (!updatedRound.opp_ranking || !updatedRound.opp_veto) {
+          if (oppUserId) {
+            try {
+              const oppUser = await interaction.client.users.fetch(oppUserId);
+              await oppUser.send(`⚠️ **1 minute left!** Room: ${room.room} | You haven't submitted your preference and veto yet. Please do it now!`);
+            } catch(e) { console.error('Could not send reminder to opp', e); }
+          }
+        }
+      }, 4 * 60 * 1000);
 
       setTimeout(async () => {
         const { resolveMotion } = require('../handlers/motionResolver');

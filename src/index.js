@@ -19,6 +19,7 @@ for (const file of commandFiles) {
   const command = require(`./commands/${file}`);
   client.commands.set(command.data.name, command);
 }
+console.log('Loaded commands:', [...client.commands.keys()]);
 
 client.once('ready', () => {
   console.log(`JanusBot is online as ${client.user.tag}`);
@@ -32,13 +33,29 @@ client.on('interactionCreate', async interaction => {
       await command.execute(interaction);
     } catch (error) {
       console.error(error);
-      await interaction.reply({ content: 'Something went wrong.', ephemeral: true });
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: 'Something went wrong.', ephemeral: true });
+      } else {
+        await interaction.editReply({ content: 'Something went wrong.' });
+      }
     }
   }
 
   if (interaction.isButton()) {
     const { handleButton } = require('./handlers/motionResolver');
     await handleButton(interaction);
+  }
+
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === 'join_team') {
+      await interaction.reply({ content: 'Please use /join command instead.', ephemeral: true });
+    }
+  }
+   if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'join_modal') {
+      const { handleJoinModal } = require('./handlers/joinHandler');
+      await handleJoinModal(interaction);
+    }
   }
 });
 
